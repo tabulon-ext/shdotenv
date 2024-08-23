@@ -1,10 +1,3 @@
-#!/usr/bin/awk -f
-
-function abort(msg) {
-  print msg > "/dev/stderr"
-  exit 1
-}
-
 function syntax_error(msg) {
   sub("[\n]+$", "", CURRENT_LINE)
   abort(sprintf("`%s': %s", CURRENT_LINE, msg))
@@ -47,7 +40,9 @@ function unquote(str, quote) {
 }
 
 function expand_env(key) {
-  return (key in environ) ? environ[key] : ""
+  if (key in environ) return environ[key]
+  if (!NOUNSET) return ""
+  abort(sprintf("%s: the key is not set", key))
 }
 
 function parse_key(key) {
@@ -86,6 +81,10 @@ function parse_unquoted_value(str) {
 
     if (match(str, "[][{}()<>\"'`!$&~|;\\\\*?]")) {
       syntax_error("using without quotes is not allowed: !$&()*;<>?[\\]`{|}~")
+    }
+
+    if (match(str, /^=.*/)) {
+      syntax_error("unquoted '=' not allowed for first character")
     }
   } else {
     str = trim(str)
@@ -159,20 +158,32 @@ function remove_optional_comment(value, len,  rest) {
 
 function output(flag, key, value) {
   if (FORMAT == "sh") output_sh(flag, key, value)
+  if (FORMAT == "csh") output_csh(flag, key, value)
   if (FORMAT == "fish") output_fish(flag, key, value)
+  if (FORMAT == "json") output_json(flag, key, value)
+  if (FORMAT == "jsonl") output_jsonl(flag, key, value)
+  if (FORMAT == "yaml") output_yaml(flag, key, value)
 }
 
 function output_sh(flag, key, value) {
-  if (match(value, /'/)) {
-    gsub(/[$`"\\]/, "\\\\&", value)
+  value = quotes(value)
+  if (flag == ONLY_EXPORT) print "export " key
+  if (flag == DO_EXPORT) print "export " key "=" value
+  if (flag == NO_EXPORT) print key "=" value
+}
+
+function output_csh(flag, key, value) {
+  if (match(value, /['\n]/)) {
+    gsub(/[$`"\\]/, "\"'&'\"", value)
+    gsub(/[\n]/, "${newline:q}", value)
     value = "\"" value "\""
   } else {
     value = "'" value "'"
   }
 
-  if (flag == ONLY_EXPORT) print "export " key
-  if (flag == DO_EXPORT) print "export " key "=" value
-  if (flag == NO_EXPORT) print key "=" value
+  if (flag == ONLY_EXPORT) print "setenv " key ";"
+  if (flag == DO_EXPORT) print "setenv " key " " value ";"
+  if (flag == NO_EXPORT) print "set " key "=" value ";"
 }
 
 function output_fish(flag, key, value) {
@@ -180,6 +191,84 @@ function output_fish(flag, key, value) {
   if (flag == ONLY_EXPORT) print "set --export " key " \"$" key "\";"
   if (flag == DO_EXPORT) print "set --export " key " '" value "';"
   if (flag == NO_EXPORT) print "set " key " '" value "';"
+}
+
+function output_json(flag, key, value) {
+  if (flag == BEFORE_ALL) {
+    print "{"
+    delim = ""
+  } else if (flag == AFTER_ALL) {
+    printf "\n}\n"
+  } else if (flag == ONLY_EXPORT || flag == DO_EXPORT || flag == NO_EXPORT) {
+    printf delim "  \"%s\": \"%s\"", key, json_escape(value)
+    delim = ",\n"
+  }
+}
+
+function output_jsonl(flag, key, value) {
+  if (flag == BEFORE_ALL) {
+    printf "{"
+    delim = ""
+  } else if (flag == AFTER_ALL) {
+    print " }"
+  } else if (flag == ONLY_EXPORT || flag == DO_EXPORT || flag == NO_EXPORT) {
+    printf delim " \"%s\": \"%s\"", key, json_escape(value)
+    delim = ","
+  }
+}
+
+function output_yaml(flag, key, value) {
+  if (flag == ONLY_EXPORT || flag == DO_EXPORT || flag == NO_EXPORT) {
+    printf "%s: \"%s\"\n", key, json_escape(value)
+  }
+}
+
+function json_escape(value) {
+  gsub(/\\/, "&&", value)
+  gsub(/\10/, "\\b", value)
+  gsub(/\f/, "\\f", value)
+  gsub(/\n/, "\\n", value)
+  gsub(/\r/, "\\r", value)
+  gsub(/\t/, "\\t", value)
+  gsub(/["]/, "\\\"", value)
+  return value
+}
+
+function process_begin() {
+  output(BEFORE_ALL)
+}
+
+function process_main(export, key, value) {
+  if (OVERLOAD) {
+    environ[key] = value
+    vars[key] = export ":" value
+    if (key in defined_key) return
+    defined_key[key] = FILENAME
+  } else {
+    if (key in defined_key) {
+      msg = "%s: `%s' is already defined in the %s"
+      abort(sprintf(msg, FILENAME, key, defined_key[key]))
+    }
+    defined_key[key] = FILENAME
+    if (key in environ) return
+    environ[key] = value
+    vars[key] = export ":" value
+  }
+  defined_keys = defined_keys " " key
+}
+
+function process_finish() {
+  len = split(trim(defined_keys), keys)
+  if (SORT) sort(keys)
+  for(i = 1; i <= len; i++) {
+    key = keys[i]
+    if (!match(key, GREP)) continue
+    match(vars[key], ":")
+    export = substr(vars[key], 1, RSTART - 1)
+    value = substr(vars[key], RSTART + 1)
+    output(export, key, value)
+  }
+  output(AFTER_ALL)
 }
 
 function parse(lines) {
@@ -209,9 +298,7 @@ function parse(lines) {
     }
 
     if (NAMEONLY) {
-      if (!OVERLOAD && key in environ) continue
       print key
-      environ[key] = ""
     } else if (equal_pos == 0) {
       output(ONLY_EXPORT, key)
     } else {
@@ -238,9 +325,7 @@ function parse(lines) {
         }
         value = parse_unquoted_value(value)
       }
-      if (!OVERLOAD && key in environ) continue
-      environ[key] = value
-      if (match(key, GREP)) output(export, key, value)
+      process_main(export, key, value)
     }
   }
 }
@@ -248,7 +333,7 @@ function parse(lines) {
 BEGIN {
   IDENTIFIER = "[a-zA-Z_][a-zA-Z0-9_]*"
   KEEP = 1; NO_KEEP = 0
-  ONLY_EXPORT = 0; DO_EXPORT = 1; NO_EXPORT = 2
+  BEFORE_ALL = 0; ONLY_EXPORT = 1; DO_EXPORT = 2; NO_EXPORT = 3; AFTER_ALL = 9
   NO_QUOTES = 0; SINGLE_QUOTES = 1; DOUBLE_QUOTES = 2
 
   ESCAPE["$"] = "$"
@@ -271,7 +356,7 @@ BEGIN {
   }
 
   if (FORMAT == "") FORMAT = "sh"
-  if (!match(FORMAT, "^(sh|fish)$")) {
+  if (!match(FORMAT, "^(sh|csh|fish|json|jsonl|yaml)$")) {
     abort("unsupported format: " FORMAT)
   }
 
@@ -279,19 +364,23 @@ BEGIN {
     ARGV[1] = "/dev/stdin"
     ARGC = 2
   }
+
+  process_begin()
   for (i = 1; i < ARGC; i++) {
-    getline < ARGV[i]
+    FILENAME = ARGV[i]
+    getline < FILENAME
     lines = $0 "\n"
     if (DIALECT == "" && sub("^# dotenv ", "")) DIALECT = $0
     if (DIALECT == "") DIALECT = "posix"
     if (!dialect("posix|docker|ruby|node|python|php|go|rust")) {
       abort("unsupported dotenv dialect: " DIALECT)
     }
-    while (getline < ARGV[i] > 0) {
+    while (getline < FILENAME > 0) {
       lines = lines $0 "\n"
     }
-    if (!match(ARGV[i], "^(/dev/stdin|-)$")) close(ARGV[i])
+    if (!match(FILENAME, "^(/dev/stdin|-)$")) close(FILENAME)
     parse(lines)
   }
+  process_finish()
   exit
 }

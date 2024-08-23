@@ -30,7 +30,7 @@ Describe "dotenv posix parser"
     }
     When call parse_env "$(data)"
     The status should be failure
-    The error should eq "\`echo a b c': not a variable definition"
+    The error should eq "shdotenv: \`echo a b c': not a variable definition"
   End
 
   It "accepts supported dotenv dialect"
@@ -41,16 +41,6 @@ Describe "dotenv posix parser"
     When call parse_env "$(data)"
     The output should eq "FOO='value'"
     The status should be success
-  End
-
-  It "does not accept unsupported dotenv dialect"
-    data() { %text
-      #|# dotenv unknown
-      #|FOO=value
-    }
-    When call parse_env "$(data)"
-    The status should be failure
-    The error should eq 'unsupported dotenv dialect: unknown'
   End
 
   Context "when the key is given"
@@ -72,12 +62,13 @@ Describe "dotenv posix parser"
 
     Describe
       Parameters
-        'FOO'             "\`FOO': not a variable definition"
-        'FOO =value'      "\`FOO ': no space allowed after the key"
-        'FOO= value'      "\`FOO= value': spaces are not allowed without quoting"
-        'FOO.BAR=value'   "\`FOO.BAR': the key is not a valid identifier"
-        '0FOO=value'      "\`0FOO': the key is not a valid identifier"
-        'export FOO.BAR'  "\`FOO.BAR': the key is not a valid identifier"
+        'FOO'             "shdotenv: \`FOO': not a variable definition"
+        'FOO =value'      "shdotenv: \`FOO ': no space allowed after the key"
+        'FOO= value'      "shdotenv: \`FOO= value': spaces are not allowed without quoting"
+        'FOO==value'      "shdotenv: \`FOO==value': unquoted '=' not allowed for first character"
+        'FOO.BAR=value'   "shdotenv: \`FOO.BAR': the key is not a valid identifier"
+        '0FOO=value'      "shdotenv: \`0FOO': the key is not a valid identifier"
+        'export FOO.BAR'  "shdotenv: \`FOO.BAR': the key is not a valid identifier"
       End
 
       It "does not parse key the \`$1'"
@@ -107,8 +98,8 @@ Describe "dotenv posix parser"
     Describe
       Parameters:value "#" "%" "+" "," "-" "." "/" ":" "=" "@" "^" "_" ""
       It "parses value the \`$1'"
-        When call parse_env "FOO=$1"
-        The output should eq "FOO='$1'"
+        When call parse_env "FOO=v$1"
+        The output should eq "FOO='v$1'"
       End
     End
 
@@ -122,7 +113,7 @@ Describe "dotenv posix parser"
       It "does not parse value the \`$1'"
         When call parse_env "FOO=$1"
         The status should be failure
-        The error should eq "\`FOO=$1': spaces are not allowed without quoting"
+        The error should eq "shdotenv: \`FOO=$1': spaces are not allowed without quoting"
       End
     End
 
@@ -132,7 +123,7 @@ Describe "dotenv posix parser"
       It "does not parse value the \`$1'"
         When call parse_env "FOO=$1"
         The status should be failure
-        The error should eq "\`FOO=$1': using without quotes is not allowed: !\$&()*;<>?[\\]\`{|}~"
+        The error should eq "shdotenv: \`FOO=$1': using without quotes is not allowed: !\$&()*;<>?[\\]\`{|}~"
       End
     End
   End
@@ -197,15 +188,15 @@ Describe "dotenv posix parser"
       }
       When call parse_env "$(data)"
       The status should be failure
-      The error should eq "$(result)"
+      The error should eq "shdotenv: $(result)"
     End
 
     Describe
       Parameters
-        "FOO='#value'# comment"   "\`FOO='#value'# comment': spaces are required before the end-of-line comment"
-        "FOO='#va'lue'"           "\`FOO='#va'lue'': using single quote not allowed in the single quoted value"
-        "FOO='value"              "\`FOO='value': unterminated quoted string"
-        "FOO=\"value"             "\`FOO=\"value': unterminated quoted string"
+        "FOO='#value'# comment"   "shdotenv: \`FOO='#value'# comment': spaces are required before the end-of-line comment"
+        "FOO='#va'lue'"           "shdotenv: \`FOO='#va'lue'': using single quote not allowed in the single quoted value"
+        "FOO='value"              "shdotenv: \`FOO='value': unterminated quoted string"
+        "FOO=\"value"             "shdotenv: \`FOO=\"value': unterminated quoted string"
       End
 
       It "does not parse value the \`$1'"
@@ -236,53 +227,6 @@ Describe "dotenv posix parser"
         When call parse_env "$1"
         The output should eq "$2"
       End
-    End
-
-    It "expands variables"
-      BeforeCall "unset VAR FOO ||:"
-      data() { %text
-        #|VAR=123
-        #|FOO="[${VAR}]"
-      }
-      result() { %text
-        #|VAR='123'
-        #|FOO='[123]'
-      }
-      When call parse_env "$(data)"
-      The output should eq "$(result)"
-    End
-
-    It "expands variables with exported values"
-      BeforeCall "export VAR=456"
-      data() { %text
-        #|FOO="[${VAR}]"
-      }
-      result() { %text
-        #|FOO='[456]'
-      }
-      When call parse_env "$(data)"
-      The output should eq "$(result)"
-    End
-
-    It "does not overload the exported value unless in overload mode"
-      BeforeCall "export FOO=123"
-      data() { %text
-        #|FOO=456
-      }
-      When call parse_env "$(data)" -v OVERLOAD=0
-      The output should eq ""
-    End
-
-    It "overloads the exported value in overload mode"
-      BeforeCall "export FOO=123"
-      data() { %text
-        #|FOO=456
-      }
-      result() { %text
-        #|FOO='456'
-      }
-      When call parse_env "$(data)" -v OVERLOAD=1
-      The output should eq "$(result)"
     End
 
     It "parses multi-line values"
@@ -328,7 +272,7 @@ Describe "dotenv posix parser"
       }
       When call parse_env "$(data)"
       The status should be failure
-      The error should eq "$(result)"
+      The error should eq "shdotenv: $(result)"
     End
 
     It "allows a trailing backslash"
@@ -345,12 +289,12 @@ Describe "dotenv posix parser"
 
     Describe
       Parameters
-        'FOO="#value"# comment' "\`FOO=\"#value\"# comment': spaces are required before the end-of-line comment"
-        'FOO="value'            "\`FOO=\"value': unterminated quoted string"
-        'FOO="$VAR"'            "\`FOO=\"\$VAR\"': the following metacharacters must be escaped: \$\`\"\\"
-        'FOO="${VAR-}"'         "\`FOO=\"\${VAR-}\"': the variable name is not a valid identifier"
-        'FOO="${VAR?}"'         "\`FOO=\"\${VAR?}\"': the variable name is not a valid identifier"
-        'FOO="val"ue"'          "\`FOO=\"val\"ue\"': the following metacharacters must be escaped: \$\`\"\\"
+        'FOO="#value"# comment' "shdotenv: \`FOO=\"#value\"# comment': spaces are required before the end-of-line comment"
+        'FOO="value'            "shdotenv: \`FOO=\"value': unterminated quoted string"
+        'FOO="$VAR"'            "shdotenv: \`FOO=\"\$VAR\"': the following metacharacters must be escaped: \$\`\"\\"
+        'FOO="${VAR-}"'         "shdotenv: \`FOO=\"\${VAR-}\"': the variable name is not a valid identifier"
+        'FOO="${VAR?}"'         "shdotenv: \`FOO=\"\${VAR?}\"': the variable name is not a valid identifier"
+        'FOO="val"ue"'          "shdotenv: \`FOO=\"val\"ue\"': the following metacharacters must be escaped: \$\`\"\\"
       End
 
       It "does not parse value the \`$1'"

@@ -2,14 +2,22 @@
 
 set -eu
 
-minify() {
-  while IFS= read -r line; do
-    # shellcheck disable=SC2295
-    line=${line#"${line%%[!$IFS]*}"}
-    case $line in "#"* | "") continue ;; esac
-    printf '%s\n' "$line"
-  done
-}
+if [ "${MINIFY:-}" ]; then
+  minify_awk() {
+    while IFS= read -r line; do
+      # shellcheck disable=SC2295
+      line=${line#"${line%%[!$IFS]*}"}
+      case $line in "#"* | "") continue ;; esac
+      printf '%s\n' "$line"
+    done
+  }
+  minify_sh() {
+    shfmt -mn -ln posix
+  }
+else
+  minify_awk() { cat; }
+  minify_sh() { cat; }
+fi
 
 while IFS= read -r line; do
   case $line in
@@ -20,8 +28,8 @@ while IFS= read -r line; do
         printf "%s='" "$varname"
         printf '%s' "$data" | sed "s/'/'\\\\''/g"
         echo "'"
-      } | minify
+      } | minify_awk
       ;;
     *) printf '%s\n' "$line" ;;
   esac
-done
+done | minify_sh
